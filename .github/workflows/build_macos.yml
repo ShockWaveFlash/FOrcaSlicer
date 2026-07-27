@@ -1,0 +1,127 @@
+name: Build FOrcaSlicer macOS (arm64)
+
+# Baut FOrcaSlicer (Snapmaker_Orca-Fork mit Mixed-Nozzle-Support) fuer Apple Silicon
+# und legt ein unsigniertes .dmg als Artifact ab.
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Tag/Branch im Upstream-Repo jiyang1018/FOrcaSlicer"
+        required: true
+        default: "v2.3.2-fos.8.5.5"
+      runner:
+        description: "GitHub-Runner-Image"
+        required: true
+        default: "macos-15"
+      deployment_target:
+        description: "OSX_DEPLOYMENT_TARGET"
+        required: true
+        default: "11.3"
+
+env:
+  SOURCE_REPO: jiyang1018/FOrcaSlicer
+  ARCH: arm64
+  # deps/CMakeLists.txt hat cmake_minimum_required(VERSION 3.2) -> CMake 4.x bricht ab
+  CMAKE_VERSION: "~3.31.0"
+
+jobs:
+  deps:
+    name: Dependencies (arm64)
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 350
+    steps:
+      - name: Checkout FOrcaSlicer ${{ inputs.source_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ inputs.source_ref }}
+          lfs: true
+
+      - name: Cache deps
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: deps/build/arm64/OrcaSlicer_dep
+          key: forca-deps-arm64-${{ inputs.source_ref }}-${{ inputs.runner }}-${{ inputs.deployment_target }}
+
+      - name: Toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          brew install automake texinfo libtool
+          echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
+
+      - uses: lukka/get-cmake@latest
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Free disk space
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h /
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          df -h /
+
+      - name: Build deps
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./build_release_macos.sh -dx -1 -a arm64 -t ${{ inputs.deployment_target }}
+
+      - name: Prune deps build tree
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd deps/build/arm64
+          find . -mindepth 1 -maxdepth 1 ! -name 'OrcaSlicer_dep' -exec rm -rf {} +
+          du -sh OrcaSlicer_dep
+
+  slicer:
+    name: Slicer + DMG (arm64)
+    needs: deps
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 350
+    steps:
+      - name: Checkout FOrcaSlicer ${{ inputs.source_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ inputs.source_ref }}
+          lfs: true
+
+      - name: Restore deps
+        uses: actions/cache/restore@v4
+        with:
+          path: deps/build/arm64/OrcaSlicer_dep
+          key: forca-deps-arm64-${{ inputs.source_ref }}-${{ inputs.runner }}-${{ inputs.deployment_target }}
+          fail-on-cache-miss: true
+
+      - name: Toolchain
+        run: brew install libtool
+
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Build slicer
+        run: ./build_release_macos.sh -s -n -x -1 -a arm64 -t ${{ inputs.deployment_target }}
+
+      - name: Create unsigned DMG
+        run: |
+          app=$(find build/arm64 -maxdepth 3 -name '*.app' -not -name '*profile_validator*' -print -quit)
+          test -n "$app" || { echo "Keine .app gefunden"; find build/arm64 -maxdepth 3 -name '*.app'; exit 1; }
+          echo "App: $app"
+          name=$(basename "$app" .app)
+          ver="${{ inputs.source_ref }}"
+          mkdir -p dmg_root
+          cp -R "$app" dmg_root/
+          ln -sfn /Applications dmg_root/Applications
+          # ad-hoc-Signatur: verhindert "beschaedigt"-Meldung auf Apple Silicon
+          codesign --force --deep --sign - "dmg_root/$(basename "$app")"
+          hdiutil create -volname "$name" -srcfolder dmg_root -ov -format UDZO \
+            "FOrcaSlicer_Mac_arm64_${ver}.dmg"
+          ls -lh *.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: FOrcaSlicer_Mac_arm64_${{ inputs.source_ref }}
+          path: "*.dmg"
+          if-no-files-found: error
