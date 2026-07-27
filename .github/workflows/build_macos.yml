@@ -12,7 +12,7 @@ on:
       runner:
         description: "GitHub-Runner-Image"
         required: true
-        default: "macos-15"
+        default: "macos-14"
       deployment_target:
         description: "OSX_DEPLOYMENT_TARGET"
         required: true
@@ -48,7 +48,9 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           brew install automake texinfo libtool
-          echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
+          # OpenVDB 8.x bricht mit clang aus Xcode 16 (-Wmissing-template-arg-list-after-template-kw)
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
 
       - uses: lukka/get-cmake@latest
         if: steps.cache.outputs.cache-hit != 'true'
@@ -94,7 +96,10 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Toolchain
-        run: brew install libtool
+        run: |
+          brew install libtool
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
 
       - uses: lukka/get-cmake@latest
         with:
