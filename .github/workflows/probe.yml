@@ -1,0 +1,18 @@
+name: Probe runner toolchains
+on:
+  workflow_dispatch:
+jobs:
+  probe15:
+    runs-on: macos-15
+    steps:
+      - run: |
+          sw_vers
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "keine Xcode-Apps"
+          xcodebuild -version
+  probe14:
+    runs-on: macos-14
+    steps:
+      - run: |
+          sw_vers
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "keine Xcode-Apps"
+          xcodebuild -version
